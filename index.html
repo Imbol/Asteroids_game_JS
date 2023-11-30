@@ -11,34 +11,57 @@
     <script>
         const FPS = 30; //frames por segundo
         const friction = 0.7;//coeficiente de fricción en el espacio
+        const game_lives = 3; //iniciar numero de vidas
+
         const laser_dist = 0.6; //maxima distancia que puede viajar el laser
         const laser_explode_dur = 0.1; //duración de la explosión del laser por segundo
         const laser_max = 10; //numero máximo de lasers en pantalla
         const laser_spd = 500; //velocidad de laser por segundo
+
         const roids_jag = 0.4; //irregularidad de los asteroides
+        const roid_pts_lge = 20; // puntos obtenidos por un gran asteroide
+        const roid_pts_med = 50; // puntos obtenidos por un medio asteroide
+        const roid_pts_sml = 100; // puntos obtenidos por un pequeño asteroide
         const roids_num = 3; //comienzo de numero de asteroides
         const roids_size = 100; //comienzo de talla de asteroides en pixeles
         const roids_spd = 50; //maxima velocidad del asteroide por segundo
         const roids_vert = 10; //promedio de numeros de vertices de cada asteroide
+
+        const save_key_score = "highscore" //guardar la clave para el almacenamiento local de la puntuación más alta
+
         const ship_blink_dur = 0.1; //parpadeo  durante la invisibilidad de la nave
         const ship_inv_dur = 3; //duración de la invisibilidad
         const ship_Explode_dur = 0.3; //duración de la explosión de la nave en segundos
         const ship_size = 30; //altura de la nave en pixeles
         const ship_thrust = 5; //aceleración de la nave
+
         const turn_speed = 360; //velocidad de giro por segundo
         const show_centre_dot = false; //mostrar u ocultar los puntos centrales
+        const sound_on = true; 
+        const music_on = true;
         const show_bounding = false; //mostrar u ocultar límites de colisión
+        const text_fade_time = 2.5 ; //tiempo de desvanecimiento del texto en segundo
+        const text_size = 40 ; //tamaño de la fuente en pixeles
+
+
 
         /** @type {HTMLCanvasElement} */
         var canv = document.getElementById("gameCanvas");
         var ctx = canv.getContext("2d");
 
-        //configuración de la nave
-        var ship = newShip();
+        //configurar efectos de sonido
+        var fxExplode = new Sound("sounds/explode.m4a");
+        var fxHit = new Sound("sounds/hit.m4a", 5);
+        var fxLaser = new Sound("sounds/laser.m4a", 5, 0.5);
+        var fxThrust = new Sound("sounds/thrust.m4a");
 
-        //configuración de asteroides
-        var roids = [];
-        createAsteroidBelt();
+        //configuración de la musica
+        var music = new Music("sounds/music-low.m4a", "sounds/music-high.m4a");
+        var roidsLeft, roidsTotal;
+
+        //configuración de los parametros del juego
+        var level, lives, roids, score, scoreHigh, ship, text, textAlpha;
+        newGame();        
 
         //configurar eventos de controladores
         document.addEventListener("keydown", keyDown);
@@ -49,8 +72,10 @@
 
         function createAsteroidBelt(){
             roids = [];
+            roidsTotal = roids_num + level * 7;
+            roidsLeft = roidsTotal;
             var x, y;
-            for (var i = 0; i < roids_num; i++){
+            for (var i = 0; i < roids_num + level; i++){
                 do{
                     x = Math.floor (Math.random() * canv.width);
                     y = Math.floor (Math.random() * canv.height);
@@ -68,21 +93,63 @@
             if(r == Math.ceil(roids_size / 2)){
                 roids.push(newAsteroid(x, y, Math.ceil(roids_size / 4)));
                 roids.push(newAsteroid(x, y, Math.ceil(roids_size / 4)));
+                score += roid_pts_lge;
             } else if (r ==  Math.ceil(roids_size / 4)){
                 roids.push(newAsteroid(x, y, Math.ceil(roids_size / 8)));
                 roids.push(newAsteroid(x, y, Math.ceil(roids_size / 8)));
+                score += roid_pts_med;
+            } else {
+                score += roid_pts_sml;
+            }
+
+            //comprobar puntaje alto
+            if(score > scoreHigh){
+                scoreHigh = score;
+                localStorage.setItem(save_key_score, scoreHigh);
             }
 
             //destruir el asteroide
             roids.splice(index, 1);
+            fxHit.play();
+
+            //calcular la proporción de asteroides restantes para determinar el tempo de la música
+            roidsLeft--;
+            music.setAsteroidRatio(roidsLeft == 0 ? 1 : roidsLeft / roidsTotal);
+
+            //nuevo nivel cuando no hay mas asteroides
+            if(roids.length == 0){
+                level++;
+                newLevel();
+            }
         }
 
         function distBetweenPoints(x1, y1, x2, y2){
             return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
         }
 
+        function drawShip(x, y, a, colours = "white"){
+            ctx.strokeStyle = colours;
+            ctx.lineWidth = ship_size / 20;
+            ctx.beginPath();
+            ctx.moveTo( //nariz de la nave
+                x + 4 / 3 * ship.r * Math.cos(a),
+                y - 4 / 3 * ship.r * Math.sin(a)
+            );
+            ctx.lineTo( //trasera izquierda
+                x - ship.r * (2 / 3 * Math.cos(a) + Math.sin(a)),
+                y + ship.r * (2 / 3 * Math.sin(a) - Math.cos(a))
+            );
+            ctx.lineTo( //trasera derecha
+                x - ship.r * (2 / 3 * Math.cos(a) - Math.sin(a)),
+                y + ship.r * (2 / 3 * Math.sin(a) + Math.cos(a))
+            );
+            ctx.closePath();
+            ctx.stroke();
+        }
+
         function explodeShip(){
-            ship.explodeTime = Math.ceil(ship_Explode_dur * FPS)
+            ship.explodeTime = Math.ceil(ship_Explode_dur * FPS);
+            fxExplode.play();
             /*ctx.fillStyle = "lime";
             ctx.strokeStyle = "lime";
             ctx.beginPath();
@@ -91,7 +158,18 @@
             ctx.stroke();*/
         }
 
+        function gameOver(){
+            //terminar el juego
+            ship.dead = true;
+            text = "Game Over";
+            textAlpha = 1.0;
+        }
+
         function keyDown(/** @type {keyboarEvent}*/ ev) {
+            if(ship.dead){
+                return;
+            }
+
             switch(ev.keyCode){
                 case 32: //Barra de espacio
                     shootLaser();
@@ -109,6 +187,10 @@
         }
 
         function keyUp(/** @type {keyboarEvent}*/ ev){
+            if(ship.dead){
+                return;
+            }
+
             switch(ev.keyCode){     
                 case 32: //Barra de espacio
                     ship.canShoot = true;
@@ -126,11 +208,12 @@
         }
 
         function newAsteroid(x, y, r){
+            var lvlMult = 1 + 0.1 * level;
             var roid = {
                 x: x,
                 y: y,
-                xv: Math.random() * roids_spd / FPS * (Math.random() < 0.5 ? 1 : -1),
-                yv: Math.random() * roids_spd / FPS * (Math.random() < 0.5 ? 1 : -1),
+                xv: Math.random() * roids_spd * lvlMult / FPS * (Math.random() < 0.5 ? 1 : -1),
+                yv: Math.random() * roids_spd * lvlMult / FPS * (Math.random() < 0.5 ? 1 : -1),
                 r: r,
                 a: Math.random() * Math.PI * 2, //en radianes
                 vert: Math.floor (Math.random() * (roids_vert + 1) + roids_vert / 2),
@@ -145,6 +228,33 @@
             return roid;
         }
 
+        function newGame(){
+            level = 0;
+            lives = game_lives;
+            score = 0;            
+            //configuración de la nave
+             ship = newShip();
+
+            //conseguir la puntuación alta del almacenamiento local
+            var scoreStr = scoreHigh = localStorage.getItem(save_key_score);
+            if (scoreStr == null){
+                scoreHigh = 0;
+            } else {
+                scoreHigh = parseInt(scoreStr);
+            }
+
+            newLevel();
+
+            //configuración de asteroides
+            //var roids = [];            
+        }
+
+        function newLevel(){
+            text = "Level " + (level + 1);
+            textAlpha = 1.0;
+            createAsteroidBelt();
+        }
+
         function newShip(){
             return {
                 x: canv.width / 2,
@@ -154,6 +264,7 @@
                 blinkNum: Math.ceil(ship_inv_dur / ship_blink_dur),
                 blinkTime: Math.ceil(ship_blink_dur * FPS),
                 canShoot: 0,
+                dead: false,
                 explodeTime: 0,
                 lasers: [],
                 rot:0,
@@ -176,24 +287,82 @@
                     dist: 0,
                     explodeTime: 0
                 });
+                fxLaser.play(); 
             }
 
             //evitar más disparos
             ship.canShoot = false;
         }
 
+        function Music(srcLow, srcHigh) {
+            this.soundLow = new Audio(srcLow);
+            this.soundHigh = new Audio(srcHigh);
+            this.low = true;
+            this.tempo = 1.0; 
+            this.beatTime = 0; 
+
+            this.play = function() {
+                if (music_on) {
+                    if (this.low) {
+                        this.soundLow.play();
+                    } else {
+                        this.soundHigh.play();
+                    }
+                    this.low = !this.low;
+                }
+            }
+
+            this.setAsteroidRatio = function(ratio) {
+                this.tempo = 1.0 - 0.75 * (1.0 - ratio);
+            }
+
+            this.tick = function() {
+                if (this.beatTime == 0) {
+                    this.play();
+                    this.beatTime = Math.ceil(this.tempo * FPS);
+                } else {
+                    this.beatTime--;
+                }
+            }
+        }
+
+        function Sound(src, maxStreams = 1, vol = 1.0){
+            this.streamNum = 0;
+            this.streams = [];
+            for(var i = 0; i < maxStreams; i++){
+                this.streams.push(new Audio(src));
+                this.streams[i].volume = vol;
+            }
+
+            this.play = function(){
+                if(sound_on){
+                    this.streamNum = (this.streamNum + 1) % maxStreams;
+                    this.streams[this.streamNum].play();
+                }
+            }
+
+            this.stop = function(){
+                this.streams[this.streamNum].pause();
+                this.streams[this.streamNum].currentTime = 0;
+            }
+        }
+
         function update(){
             var blinkOn = ship.blinkNum % 2 == 0;
             var exploding = ship.explodeTime > 0;
 
+            //marque la música
+            music.tick();
+
             //Dibujar espacio
             ctx.fillStyle = "black";
             ctx.fillRect(0, 0, canv.width, canv.height);
-
+            
             //impulsar la nave
-            if(ship.thrusting){
+            if(ship.thrusting && !ship.dead){
                 ship.thrust.x += ship_thrust * Math.cos(ship.a) / FPS;
                 ship.thrust.y -= ship_thrust * Math.sin(ship.a) / FPS;
+                fxThrust.play();
 
                 //dibujar el propulsor
                 if(!exploding && blinkOn){
@@ -220,28 +389,13 @@
             } else {
                 ship.thrust.x -= friction * ship.thrust.x / FPS;
                 ship.thrust.y -= friction * ship.thrust.y / FPS;
+                fxThrust.stop();
             }
 
             //Dibujar nave
             if (!exploding){
-                if(blinkOn){
-                    ctx.strokeStyle = "white";
-                    ctx.lineWidth = ship_size / 20;
-                    ctx.beginPath();
-                    ctx.moveTo( //nariz de la nave
-                        ship.x + 4 / 3 * ship.r * Math.cos(ship.a),
-                        ship.y - 4 / 3 * ship.r * Math.sin(ship.a)
-                    );
-                    ctx.lineTo( //trasera izquierda
-                        ship.x - ship.r * (2 / 3 * Math.cos(ship.a) + Math.sin(ship.a)),
-                        ship.y + ship.r * (2 / 3 * Math.sin(ship.a) - Math.cos(ship.a))
-                    );
-                    ctx.lineTo( //trasera derecha
-                        ship.x - ship.r * (2 / 3 * Math.cos(ship.a) - Math.sin(ship.a)),
-                        ship.y + ship.r * (2 / 3 * Math.sin(ship.a) + Math.cos(ship.a))
-                    );
-                    ctx.closePath();
-                    ctx.stroke();
+                if(blinkOn && !ship.dead){                    
+                    drawShip(ship.x, ship.y, ship.a);
                 }
 
                 //manejar parpadeando
@@ -256,7 +410,7 @@
                     }
                 }
             } else {
-                //dibujar explisión
+                //dibujar explosión
                 ctx.fillStyle = "darkred";
                 ctx.beginPath();
                 ctx.arc(ship.x, ship.y, ship.r * 1.7, 0, Math.PI * 2, false);
@@ -358,6 +512,36 @@
                 }
             }
 
+            //dibujar el texto del juego
+            if(textAlpha >= 0){
+                ctx.textAlign = "center";                
+                ctx.fillStyle = "rgba(255, 255, 255, " + textAlpha + ")";
+                ctx.font = "small-caps " + text_size + "px dejavu sans mono";
+                ctx.fillText(text, canv.width / 2, canv.height * 0.75);
+                textAlpha -= (1.0 / text_fade_time / FPS);
+            } else if (ship.dead){
+                newGame();
+            }
+
+            //dibujar las vidas
+            var lifeColour;
+            for(var i = 0; i < lives; i++){
+                lifeColour = exploding && i == lives - 1 ? "red" : "white";
+                drawShip(ship_size + i * ship_size * 1.2, ship_size, 0.5 * Math.PI, lifeColour);
+            }
+
+            //dibujar puntuación
+            ctx.textAlign = "right";                
+            ctx.fillStyle = "white";
+            ctx.font = text_size + "px dejavu sans mono";
+            ctx.fillText(score, canv.width - ship_size / 2, ship_size);    
+            
+            //dibujar puntuación alta
+            ctx.textAlign = "center";                
+            ctx.fillStyle = "white";
+            ctx.font = (text_size * 0.75) + "px dejavu sans mono";
+            ctx.fillText("BEST " + scoreHigh, canv.width / 2, ship_size); 
+
             //detectar golpe del laser con el asteroide
             var ax, ay, ar, lx, lt, ly;
             for(var i = roids.length - 1; i >= 0; i--){
@@ -385,7 +569,8 @@
 
             //comprobar si hay colisiones de asteroides 
             if(!exploding){
-                if(ship.blinkNum == 0) {
+                //solo verifique cuando no esté parpadeando 
+                if(ship.blinkNum == 0 && !ship.dead) {
                     for (var i = 0; i < roids.length; i++) {
                         if (distBetweenPoints(ship.x, ship.y, roids[i].x, roids[i].y) < ship.r + roids[i].r){ 
                             explodeShip();
@@ -404,8 +589,14 @@
         } else {
             ship.explodeTime--;
 
+            //resetear la nave despues de la explosión
             if(ship.explodeTime == 0){
-                ship = newShip();
+                lives--;
+                if(lives == 0){
+                    gameOver();
+                } else {
+                    ship = newShip();
+                }
             }
         }
 
@@ -447,7 +638,7 @@
                     //calcular la distancia del viaje
                     ship.lasers[i].dist += Math.sqrt(Math.pow(ship.lasers[i].xv, 2) + Math.pow(ship.lasers[i].yv, 2));
                 }
-
+                /*
                 //manejar el borde de la pantalla
                 if(ship.lasers[i].x < 0){
                     ship.lasers[i].x = canv.width;
@@ -459,6 +650,7 @@
                 } else if (ship.lasers[i].y > canv.height){
                     ship.lasers[i].y = 0;
                 }
+                */
             }
             
             //mover asteroide
